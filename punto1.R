@@ -1,0 +1,397 @@
+setwd('/home/steven/Code/codeR/proyectoEsta')
+#install.packages("ggplot"2)
+#install.packages("skimr")
+#install.packages("writexl")
+#install.packages("moments")
+#install.packages("dplyr")
+#install.packages("caret")
+
+
+library(ggplot2)
+library(skimr)
+library(writexl)
+library(glue)
+library(moments)
+library(dplyr)
+library(caret)
+
+df <- read.csv('/home/steven/Descargas/Datos_MP1.csv')
+
+#----DATA-ENTRADA-REGRESION-----------------------------------------------------
+
+dfBin <- data.frame(Presencia = integer(0), Alcohol = numeric(0))
+
+for (row in 1:nrow(df)){
+  binValue <-  1
+  for (c in as.numeric(df[row, 2:ncol(df)])) {
+    dfBin <- rbind(
+      dfBin, 
+      data.frame(Alcohol = rep(df[row, 1], c), Presencia = rep(binValue, c))
+    )
+    binValue = 0
+  }
+}
+
+Alcohol <- seq(min(df$Alcohol), max(df$Alcohol), length.out = 200)
+
+#--------------------DESARROLLO ANALISIS-DATOS----------------------------------
+
+binTable <- table(dfBin)
+descDfBin <- skim(dfBin)
+# 
+kPresente <- round(kurtosis(dfBin$Alcohol[dfBin$Presencia == 1]), 3)
+kAusente <- round(kurtosis(dfBin$Alcohol[dfBin$Presencia == 0]), 3)
+
+asAusente <- round(skewness(dfBin$Alcohol[dfBin$Presencia == 0]), 3)
+asPresente <- round(skewness(dfBin$Alcohol[dfBin$Presencia == 1]), 3)
+
+dataForma <- data.frame(
+  Deformidad = c("No", "Si"),
+  Kurtosis = c(kAusente, kPresente),
+  Asimetria = c(asAusente, asPresente)
+)
+
+write_xlsx(dataForma, '/home/steven/Code/codeR/proyectoEsta/tables1/formaData.xlsx')
+write_xlsx(dfBin, '/home/steven/Code/codeR/proyectoEsta/tables1/binTable.xlsx')
+write_xlsx(descDfBin, '/home/steven/Code/codeR/proyectoEsta/tables1/descriptionDfBin.xlsx')
+
+
+#------------------------GRAFICOS-----------------------------------------------
+
+png("/home/steven/Code/codeR/proyectoEsta/graphs1/alcohol.png", width = 1200, height = 800)
+
+par(mfrow = c(2, 2))
+
+barplot(
+  t(as.matrix(df[, c("Frec.Ausente")])),
+  names.arg = df$Alcohol,
+  legend.text = c("Ausente"),
+  col = c('red'),
+  main = "1)",
+  xlab = "Nivel de Alcohol",
+  ylab = "Frecuencia"
+)
+
+barplot(
+  t(as.matrix(df[, c("Frec.Presente")])),
+  names.arg = df$Alcohol,
+  legend.text = c("Prensente"),
+  col = c('blue'),
+  main = "2)",
+  xlab = "Nivel de Alcohol",
+  ylab = "Frecuencia"
+) 
+
+boxplot(
+  Alcohol ~ Presencia,
+  data = dfBin,
+  border = "blue",
+  notch = TRUE,
+  outcol = "red",
+  main = "3)",
+  xlab = "Consumo de alcohol", 
+  ylab = "Presencia"
+)
+
+plot(
+  df$Alcohol,
+  df$Frec.Presente/(df$Frec.Presente + df$Frec.Ausente),
+  main = "4)", 
+  xlab = "Nivel de alchol",
+  ylab = "Probabilidad de presencia por individuo",
+  col = "black",
+  pch = 19
+)
+lines(
+  df$Alcohol,
+  df$Frec.Presente/(df$Frec.Presente + df$Frec.Ausente),
+  col = "red",
+  lwd = 2
+) 
+
+dev.off()
+
+#--------------------DESARROLLO REGRESION---------------------------------------
+
+logModel <- glm(Presencia ~ Alcohol, data = dfBin, family = binomial(link = "logit"))
+probitModel <- glm(Presencia ~ Alcohol, data = dfBin, family = binomial(link = "probit"))
+
+#--------------------ANALISIS REGRESION-----------------------------------------
+
+def_predLog <- predict(object = logModel, newdata = dfBin, type = 'response')
+def_predLog <- ifelse(test = def_predLog > 0.5, yes = 1, no = 0)
+
+def_predPro <- predict(object = probitModel, newdata = dfBin, type = 'response')
+def_predPro <- ifelse(test = def_predPro > 0.5, yes = 1, no = 0)
+
+
+dfBinLog <- dfBin %>%
+  mutate(def_predLog = def_predLog) %>%
+  select(def_predLog, everything()) %>%
+  mutate(comparison = ifelse(def_predLog == Presencia, 1, 0))
+
+dfBinPro <- dfBin %>%
+  mutate(def_predPro = def_predPro) %>%
+  select(def_predPro, everything()) %>%
+  mutate(comparison = ifelse(def_predPro == Presencia, 1, 0))
+
+erroresLogModel <- nrow(dfBinLog) - sum(dfBinLog$comparison)
+erroresProModel <- nrow(dfBinPro) - sum(dfBinPro$comparison)
+
+pseudoRLog <- ((logModel$null.deviance - deviance(logModel)) / logModel$null.deviance)*100
+pseudoRPro <- ((probitModel$null.deviance - deviance(probitModel)) / probitModel$null.deviance)*100
+
+meanPredPro <- mean(dfBinPro$Presencia == dfBinPro$def_predPro)
+meanPredLog <- mean(dfBinLog$Presencia == dfBinLog$def_predLog)
+
+reportModels <- data.frame(
+  Link = c('Logit', 'Probit'),
+  Intercepto = c(coef(logModel)[1], coef(probitModel)[1]),
+  Alcohol = c(coef(logModel)[2],  coef(probitModel)[2]),
+  AIC = c(logModel$aic, probitModel$aic),
+  R2 = c(pseudoRLog, pseudoRPro),
+  Errores = c(erroresLogModel, erroresProModel)
+)
+
+write_xlsx(reportModels , '/home/steven/Code/codeR/proyectoEsta/tables1/Regresion.xlsx')
+
+
+dfProporcion <- data.frame(Alcohol = integer(0), Propor = integer(0))
+
+for (i in 1:nrow(df)) {
+  data <- data.frame(
+    Alcohol = df[i, 1],  Propor = df[i, 2] / sum(df[i, 2] + df[i, 3])
+  )
+  dfProporcion <- rbind(dfProporcion, data)
+}
+
+#------------------------GRAFICAS-REGRESION-LOGISTICA---------------------------
+
+png('/home/steven/Code/codeR/proyectoEsta/graphs1/Regresiones.png', width = 1200, height = 600)
+par(mfrow = c(1, 2))
+
+plot(
+  dfBin$Alcohol,
+  dfBin$Presencia,
+  main = "1)",
+  xlab = "Nivel de alcohol",
+  ylab = "Deformismo (1 = Presenta, 0 = No presenta)",
+  pch = 19
+) 
+curve(
+  predict(logModel, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "blue",
+  lwd = 6,
+  lty = 2
+) 
+curve(
+  predict(probitModel, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "red",
+  lwd = 6,
+  lty = 2
+)
+legend(
+  "topleft",
+  legend = c("Logit", "Probit", "Casos reales"),
+  col = c("blue", "red", "black"),
+  lwd = c(2, 2, NA),
+  lty = c(2, 2, NA),
+  pch = c(NA, NA, 19)
+)
+
+
+plot(
+  dfProporcion$Alcohol,
+  dfProporcion$Propor,
+  col = 'black',
+  main = "2)",
+  xlab = "Nivel de alcohol",
+  ylab = "Probabilidad deformismo",
+  lwd = 2,
+  pch = 19
+)
+curve(
+  predict(logModel, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "blue",
+  lty = 2
+) 
+curve(
+  predict(probitModel, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "red",
+  lty = 2
+)
+legend(
+  "topleft",
+  legend = c("Logit", "Probit", "Proporcion"),
+  col = c("blue", "red", "black"),
+  lwd = c(2, 2, NA),
+  lty = c(2, 2, NA),
+  pch = c(NA, NA, 19)
+)
+
+dev.off()
+
+#------------------------------PARTICION----------------------------------------
+
+set.seed(45)
+
+dfBinNo <- dfBin %>% filter(Presencia == 0)
+dfBinSi <- dfBin %>% filter(Presencia == 1)
+
+n_test <- floor(0.1 * nrow(dfBinNo))
+dfPartNo <- sample(seq_len(nrow(dfBinNo)), size = n_test)
+
+test <- dfBinNo[-dfPartNo, ]
+train <- rbind(dfBinNo[dfPartNo, ], dfBinSi)
+
+write_xlsx(train, '/home/steven/Code/codeR/proyectoEsta/tables1/Train.xlsx')
+write_xlsx(test, '/home/steven/Code/codeR/proyectoEsta/tables1/Test.xlsx')
+
+trainTable <- table(train)
+trainDF <- as.data.frame.matrix(trainTable)
+trainDF <- cbind(Alcohol = rownames(trainDF), trainDF)
+
+#--------------------DESARROLLO REGRESION-CON-PARTICION-------------------------
+
+logModelP <- glm(Presencia ~ Alcohol, data = train, family = binomial(link = "logit"))
+probitModelP <- glm(Presencia ~ Alcohol, data = train, family = binomial(link = "probit"))
+
+#--------------------ANALISIS-REGRESION-CON-PARTICION---------------------------
+
+def_predLogP <- predict(logModelP, newdata = data.frame(Alcohol = test$Alcohol), type = "response")
+def_predLogP <- ifelse(def_predLogP >= 0.5, 1, 0)
+
+def_predProP <- predict(probitModelP, newdata = data.frame(Alcohol = test$Alcohol), type = "response")
+def_predProP <- ifelse(def_predProP >= 0.5, 1, 0)
+
+y_test <- test$Presencia
+
+predVsmodelLogP <- table(Predicho = def_predLogP, Real = y_test)
+predVsmodelLogP <- table(Predicho = def_predProP, Real = y_test)
+
+dfBinLogP <- test %>%
+  mutate(def_predLogP = def_predLogP) %>%
+  select(def_predLogP, everything()) %>%
+  mutate(comparison = ifelse(def_predLogP == Presencia, 1, 0))
+
+dfBinProP <- test %>%
+  mutate(def_predProP = def_predProP) %>%
+  select(def_predProP, everything()) %>%
+  mutate(comparison = ifelse(def_predProP == Presencia, 1, 0))
+
+erroresLogModelP <- nrow(dfBinLogP) - sum(dfBinLogP$comparison)
+erroresProModelP <- nrow(dfBinProP) - sum(dfBinProP$comparison)
+
+pseudoRLogP <- ((logModelP$null.deviance - deviance(logModelP )) / logModelP$null.deviance)*100
+pseudoRProP <- ((probitModelP$null.deviance - deviance(probitModelP)) / probitModelP$null.deviance)*100
+
+meanPredProP <- mean(dfBinProP$Presencia == dfBinProP$def_predProP)
+meanPredLogP <- mean(dfBinLogP$Presencia == dfBinLogP$def_predLogP)
+
+reportModelsP <- data.frame(
+  Link = c('Logit', 'Probit'),
+  Intercepto = c(coef(logModelP)[1], coef(probitModelP)[1]),
+  Alcohol = c(coef(logModelP)[2],  coef(probitModelP)[2]),
+  AIC = c(logModelP$aic, probitModelP$aic),
+  R2 = c(pseudoRLogP, pseudoRProP),
+  Errores = c(erroresLogModelP, erroresProModelP)
+)
+
+write_xlsx(reportModelsP , '/home/steven/Code/codeR/proyectoEsta/tables1/RegresionP.xlsx')
+
+dfProporcionTrain <- data.frame(Alcohol = integer(0), Propor = integer(0))
+
+for (i in 1:nrow(trainDF)) {
+  data <- data.frame(
+    Alcohol = trainDF[i, 1],  Propor = trainDF[i, 3] / sum(trainDF[i, 2] + trainDF[i, 3])
+  )
+  dfProporcionTrain <- rbind(dfProporcionTrain, data)
+}
+
+#----------------GRAFICAS-REGRESION-LOGISTICA-PATICION--------------------------
+
+png('/home/steven/Code/codeR/proyectoEsta/graphs1/RegresionesParticion.png', width = 1200, height = 600)
+par(mfrow = c(1, 2))
+
+plot(
+  dfBin$Alcohol, 
+  dfBin$Presencia,
+  lwd = 2,
+  main = "1)",
+  pch = 19,
+  xlab = "Nivel de alcohol",
+  ylab = "Deformismo (1 = Presenta, 0 = No presenta)",
+)
+curve(
+  predict(logModelP, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "blue",
+  lty = 2
+)
+curve(
+  predict(probitModelP, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "red",
+  lty = 2
+)
+legend(
+  "topleft",
+  legend = c("Logit", "Probit", "Casos reales"),
+  col = c("blue", "red", "black"),
+  lwd = c(2, 2, NA),
+  lty = c(2, 2, NA),
+  pch = c(NA, NA, 19)
+)
+
+
+plot(
+  dfProporcionTrain$Alcohol,
+  dfProporcionTrain$Propor,
+  lwd = 2,
+  main = "2)",
+  pch = 19,
+  xlab = "Nivel de alcohol",
+  ylab = "Probabilidad deformismo",
+)
+curve(
+  predict(logModelP, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfBin$Alcohol),
+  to = max(dfBin$Alcohol),
+  add = TRUE,
+  col = "blue",
+  lty = 2
+)
+curve(
+  predict(probitModelP, newdata = data.frame(Alcohol = x), type = "response"),
+  from = min(dfProporcionTrain$Alcohol),
+  to = max(dfProporcionTrain$Alcohol),
+  add = TRUE,
+  col = "red",
+  lty = 2
+)
+legend(
+  "topleft",
+  legend = c("Logit", "Probit", "Proporcion"),
+  col = c("blue", "red", "black"),
+  lwd = c(2, 2, NA),
+  lty = c(2, 2, NA),
+  pch = c(NA, NA, 19)
+)
+
+dev.off()
